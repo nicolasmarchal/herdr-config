@@ -112,6 +112,13 @@
                           "content": {
                             "mod": "coding-files"
                           }
+                        },
+                        {
+                          "id": "history",
+                          "type": "block",
+                          "content": {
+                            "mod": "coding-history"
+                          }
                         }
                       ],
                       "active": "changes"

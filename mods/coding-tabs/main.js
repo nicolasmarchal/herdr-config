@@ -141,7 +141,9 @@ printf '%s\n%s\n%s\n' "$top" "$x" "$a"`;
       ? Math.max(10, (root.traffic_lights[0] + 64) / settings().zoom - (sidebar?.hidden ? 0 : sidebar?.size?.px ?? 0))
       : 10;
     const panel = find(root, "panel"), body = find(root, "panel-body");
-    const enabled = shared("workspace.panels") ?? ["files", "changes"];
+    const enabled = [...(shared("workspace.panels") ?? ["files", "changes"])];
+    // Coding's History panel, when this layout has one.
+    if (find(root, "history")) enabled.push("history");
     this.syncTab(selected, root, enabled);
     const ide = this.ide(space, selected);
     const openIn = (app, path) => exec("open", ["-a", app, path]).then(r => { if (r.code !== 0) notify({ title: `Couldn't open ${app}`, body: r.stderr.trim(), level: "error" }); });
@@ -176,6 +178,7 @@ printf '%s\n%s\n%s\n' "$top" "$x" "$a"`;
       .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 })))
       .when(enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
       .when(enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))
+      .when(enabled.includes("history"), el => el.child(panelButton("history", "History", "mods/workspace-chrome/clock.svg")))
       .when(Boolean(ide?.xcode || ide?.android), el => el.child(div().w(1).h(16).mx(4).bg(t.border)))
       .when(Boolean(ide?.xcode), el => el.child(h_flex().id("open-xcode").h(26).px(8).gap(5).flex_none().items_center().rounded(6).text_size(12).text_color(t.muted)
         .hover(s => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop).on_click(() => openIn("Xcode", ide.xcode))

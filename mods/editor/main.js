@@ -4,7 +4,8 @@
 // props {root?, file?} to open a folder / file directly, or {follow: true} in a
 // layout block (Coding layout): follows the active tab (each Herdr tab keeps its
 // own open files), opens shared "editor.open" { path, n, diff? }. Files opened
-// with diff: true get Changes / Old / New views.
+// with diff: true get Changes / Old / New views; with commit: <sha> they show that
+// commit's change to the file (Old: before it, New: as of it, read-only).
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState, Input, InputState, Scrollbar, v_virtual_list } from "gpui-base";
 import { panes, spaces, focused, exec, readTextFile, writeTextFile, theme, settings, props, nextCommand, notify, shared, run } from "herdr";
@@ -61,7 +62,7 @@ export default class ZedEditor extends View {
     this.at = 0; this.finding = false;
     if (!this.follow) cx.spawn(async (cx) => {
       await this.setRoot(await this.findRoot(p.root), cx);
-      if (p.file) this.openPath(p.file, cx, p.view ?? null);
+      if (p.file) this.openPath(p.file, cx, p.view ?? (p.commit ? "changes" : null), p.commit ?? null);
       if (!this.tabs.length) this.openFinder();
       cx.notify();
     });
@@ -104,7 +105,7 @@ export default class ZedEditor extends View {
     if (!req?.n || req.n <= this.seenOpen || !this.root) return;
     this.seenOpen = req.n;
     if (req.find) { if (!this.tabs.length) this.openFinder(); return; }
-    this.openPath(req.path, cx, req.diff ? "changes" : null);
+    this.openPath(req.path, cx, req.diff || req.commit ? "changes" : null, req.commit ?? null);
   }
 
   async findRoot(given, space) {
@@ -138,7 +139,7 @@ export default class ZedEditor extends View {
       let saved = null;
       try { saved = JSON.parse(localStorage.getItem(`editor:${key}`) ?? "null"); } catch {}
       if (saved?.root === root) {
-        for (const f of saved.files ?? []) this.open(typeof f === "string" ? f : f.path, cx, false, f.view ?? null);
+        for (const f of saved.files ?? []) this.open(typeof f === "string" ? f : f.path, cx, false, f.view ?? null, f.commit ?? null);
         if (saved.active >= 0) this.active = Math.min(saved.active, this.tabs.length - 1);
       }
     }
@@ -159,26 +160,26 @@ export default class ZedEditor extends View {
 
   persist() {
     if (!this.key) return;
-    try { localStorage.setItem(`editor:${this.key}`, JSON.stringify({ root: this.root, files: this.tabs.map(t => ({ path: t.path, view: t.view })), active: this.active })); } catch {}
+    try { localStorage.setItem(`editor:${this.key}`, JSON.stringify({ root: this.root, files: this.tabs.map(t => ({ path: t.path, view: t.view, commit: t.commit })), active: this.active })); } catch {}
   }
 
-  openPath(path, cx, view = null) {
+  openPath(path, cx, view = null, commit = null) {
     if (!path) return;
     this.finding = false;
-    this.open(this.root && path.startsWith(this.root + "/") ? path.slice(this.root.length + 1) : path, cx, true, view);
+    this.open(this.root && path.startsWith(this.root + "/") ? path.slice(this.root.length + 1) : path, cx, true, view, commit);
   }
 
   abs(path) { return path.startsWith("/") ? path : `${this.root}/${path}`; }
 
-  open(path, cx, focus = true, view = null) {
-    const existing = this.tabs.findIndex(t => t.path === path);
+  open(path, cx, focus = true, view = null, commit = null) {
+    const existing = this.tabs.findIndex(t => t.path === path && (t.commit ?? null) === commit);
     if (existing >= 0) {
       const tab = this.tabs[existing];
       if (focus) this.active = existing;
       if (view) this.setView(tab, view, cx);
       this.persist(); return;
     }
-    const tab = { path, state: null, saved: null, dirty: false, error: null, view: null };
+    const tab = { path, state: null, saved: null, dirty: false, error: null, view: null, commit };
     this.tabs.push(tab);
     if (focus || this.active < 0) this.active = this.tabs.length - 1;
     this.persist();
@@ -210,9 +211,14 @@ export default class ZedEditor extends View {
     const root = this.root, on = this.on;
     cx.spawn(async (cx) => {
       const git = (args) => exec("git", [...READ, ...args], { cwd: root, on }).catch(() => null);
-      const tracked = await git(["ls-files", "--error-unmatch", "--", tab.path]);
       let lines;
-      if (tracked?.code !== 0) {
+      const tracked = tab.commit ? null : await git(["ls-files", "--error-unmatch", "--", tab.path]);
+      if (tab.commit) {
+        // What that commit did to the file (against its first parent; the first commit: everything).
+        const r = await git(["show", "--format=", "--no-ext-diff", "--no-color", "--first-parent", tab.commit, "--", tab.path]);
+        const all = (r?.stdout ?? "").replace(/\n$/, "").split("\n"), first = all.findIndex(l => l.startsWith("@@"));
+        lines = first < 0 ? [r?.stdout?.includes("Binary") ? "Binary file changed" : "No text change in this commit"] : all.slice(first);
+      } else if (tracked?.code !== 0) {
         const text = await readTextFile(`${root}/${tab.path}`, { on }).catch(() => null);
         lines = text === null ? ["File not found"] : text.includes("\0") ? ["Binary file"]
           : [`@@ -0,0 +1 @@ new file`, ...text.slice(0, 400000).replace(/\n$/, "").split("\n").map(l => `+${l}`)];
@@ -231,8 +237,9 @@ export default class ZedEditor extends View {
   loadOld(tab, cx) {
     const root = this.root, on = this.on;
     cx.spawn(async (cx) => {
-      const r = await exec("git", [...READ, "show", `HEAD:${tab.path}`], { cwd: root, on }).catch(() => null);
-      if (r?.code !== 0) tab.oldError = "New file · no previous version";
+      const before = tab.commit ? `${tab.commit}^` : "HEAD";
+      const r = await exec("git", [...READ, "show", `${before}:${tab.path}`], { cwd: root, on }).catch(() => null);
+      if (r?.code !== 0) tab.oldError = tab.commit ? "Added in this commit · no previous version" : "New file · no previous version";
       else if (r.stdout.includes("\0")) tab.oldError = "Binary file";
       else tab.oldState = EditorState.new({ language: this.language(tab.path), value: r.stdout, readonly: true,
         font_family: settings().font_family, font_size: 13, syntax: this.syntax() });
@@ -253,7 +260,7 @@ export default class ZedEditor extends View {
   diffView(tab, t) {
     const rows = tab.diff;
     if (!rows) return div().flex_1().p(12).text_color(t.dim).child("Loading changes…");
-    const id = `ed-diff-${this.key}-${tab.path}`;
+    const id = `ed-diff-${this.key}-${tab.path}@${tab.commit ?? ""}`;
     return div().flex_1().min_h(0).relative().font_family(settings().font_family ?? "JetBrains Mono").text_size(12)
       .child(div().id(`${id}-x`).size_full().overflow_x_scrollbar()
         .child(div().w_full().min_w(tab.diffWidth).h_full().child(v_virtual_list(id, rows.length, 20, (i) => String(i),
@@ -264,14 +271,17 @@ export default class ZedEditor extends View {
   load(tab, cx) {
     cx.spawn(async (cx) => {
       try {
-        const text = await readTextFile(this.abs(tab.path), { on: this.on });
-        if (text === null) tab.error = "File not found";
+        const text = tab.commit
+          ? await exec("git", [...READ, "show", `${tab.commit}:${tab.path}`], { cwd: this.root, on: this.on })
+              .then(r => r.code === 0 ? r.stdout : null).catch(() => null)
+          : await readTextFile(this.abs(tab.path), { on: this.on });
+        if (text === null) tab.error = tab.commit ? "Deleted in this commit" : "File not found";
         else if (text.includes("\0")) tab.error = "Binary file";
         else {
           tab.state?.release();
           tab.saved = text; tab.dirty = false; tab.error = null;
           tab.state = EditorState.new({
-            language: this.language(tab.path), value: text, readonly: this.on !== null,
+            language: this.language(tab.path), value: text, readonly: this.on !== null || Boolean(tab.commit),
             font_family: settings().font_family, font_size: 13, syntax: this.syntax(),
           });
           tab.state.on("change", (_e, cx) => {
@@ -388,11 +398,12 @@ export default class ZedEditor extends View {
       .child(h_flex().id("editor-tabs").h(32).flex_none().bg(t.chrome).border_b(1).border_color(t.border).overflow_x_scroll()
         .children(this.tabs.map((x, i) => {
           const on = i === this.active, name = x.path.split("/").pop();
-          return h_flex().id(`tab-${x.path}`).h_full().flex_none().pl(12).pr(6).gap(6).items_center().cursor_pointer()
+          return h_flex().id(`tab-${x.path}@${x.commit ?? ""}`).h_full().flex_none().pl(12).pr(6).gap(6).items_center().cursor_pointer()
             .border_r(1).border_color(t.border).when(on, el => el.bg(t.background)).hover(s => s.bg(on ? t.background : t.hover))
             .on_click((_e, cx) => { this.active = i; this.finding = false; this.persist(); cx.notify(); })
             .child(div().text_color(on ? t.foreground : t.muted).child(name))
-            .child(div().id(`tabx-${x.path}`).w(16).h(16).flex().items_center().justify_center().rounded(4).text_size(11)
+            .when(Boolean(x.commit), el => el.child(div().px(4).rounded(3).bg(t.raised).text_size(10).text_color(t.muted).child(x.commit?.slice(0, 7) ?? "")))
+            .child(div().id(`tabx-${x.path}@${x.commit ?? ""}`).w(16).h(16).flex().items_center().justify_center().rounded(4).text_size(11)
               .text_color(x.dirty ? t.accent : t.dim).hover(s => s.bg(t.raised).text_color(t.foreground))
               .on_click((_e, cx) => { cx.stop_propagation(); this.closeTab(i, cx); })
               .child(x.dirty ? "●" : "✕"));
@@ -415,7 +426,8 @@ export default class ZedEditor extends View {
       // Status bar
       .child(h_flex().h(24).flex_none().px(10).gap(10).items_center().bg(t.chrome).border_t(1).border_color(t.border).text_size(11).text_color(t.dim)
         .child(div().flex_1().min_w(0).truncate().child(tab ? `${rootName}/${tab.path}` : this.root ?? ""))
-        .when(tab?.view === "old", el => el.child(div().child("HEAD · read-only")))
+        .when(Boolean(tab?.commit), el => el.child(div().child(`commit ${tab.commit.slice(0, 7)} · read-only`)))
+        .when(!tab?.commit && tab?.view === "old", el => el.child(div().child("HEAD · read-only")))
         .when(Boolean(tab?.conflict), el => el.child(div().id("editor-reload").text_color(t.blocked).cursor_pointer().hover(s => s.text_color(t.foreground))
           .on_click((_e, cx) => { tab.conflict = false; this.load(tab, cx); }).child("Changed on disk · Reload")))
         .when(Boolean(tab?.dirty), el => el.child(div().text_color(t.accent).child("Modified")))
