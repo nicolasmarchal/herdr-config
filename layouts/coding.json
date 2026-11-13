@@ -10,7 +10,7 @@
           "id": "brand",
           "type": "block",
           "content": {
-            "mod": "workspace-chrome"
+            "mod": "herdr-chrome"
           },
           "size": {
             "px": 46
@@ -49,7 +49,7 @@
           "id": "sidebar-footer",
           "type": "block",
           "content": {
-            "mod": "workspace-chrome",
+            "mod": "herdr-chrome",
             "props": {
               "footer": true
             }
