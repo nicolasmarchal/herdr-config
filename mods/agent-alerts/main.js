@@ -40,7 +40,7 @@ export default class AgentAlerts extends View {
     const who = a.program?.name ?? a.app ?? "Agent";
     const title = `${who} · ${a.space_name}`;
     const message = a.status === "blocked" ? "Needs you" : "Finished";
-    const subtitle = /^\d+$/.test(a.tab_name ?? "") || !a.tab_name ? `Tab ${a.tab_index + 1}` : a.tab_name;
+    const subtitle = /^\d+$/.test(a.tab_name ?? "") || !a.tab_name ? `Tab ${a.tab_index}` : a.tab_name;
     const fallback = () => exec("osascript", ["-e", `display notification ${JSON.stringify(message)} with title ${JSON.stringify(title)} subtitle ${JSON.stringify(subtitle)}`]).catch(() => {});
     if (!this.notifier) return fallback();
     exec(this.notifier, ["-title", title, "-subtitle", subtitle, "-message", message, "-group", `herdr-${a.address}`,

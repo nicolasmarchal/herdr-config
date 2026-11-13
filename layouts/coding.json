@@ -207,6 +207,16 @@
                   }
                 },
                 {
+                  "id": "island",
+                  "type": "block",
+                  "size": {
+                    "px": 78
+                  },
+                  "content": {
+                    "mod": "island"
+                  }
+                },
+                {
                   "id": "agent-alerts",
                   "type": "block",
                   "content": {

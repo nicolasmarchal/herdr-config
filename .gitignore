@@ -56,3 +56,7 @@ mods/win98/
 mods/workspace-chrome/
 mods/workspace-status/
 mods/worktree/
+
+# HerdrIsland: live state and build output
+island/state.json
+island/build/
