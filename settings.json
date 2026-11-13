@@ -1,0 +1,11 @@
+{
+  "zoom": 1,
+  "sounds": {
+    "enabled": true
+  },
+  "font_ligatures": false,
+  "minimum_contrast": 1,
+  "font": "0xProto Nerd Font",
+  "font_size": 13,
+  "ui_font": "SF Pro"
+}
