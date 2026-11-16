@@ -382,7 +382,7 @@ export default class Spaces extends View {
 
   // New space in a folder: a new branch in a new worktree, or a plain space there.
   addTo(f) {
-    if (f.g) openOverlay({ mod: "worktree", kind: "dialog", width: 440, height: 260, props: { folder: f.dir, machine: f.machine, action: "new" } });
+    if (f.g) openOverlay({ mod: "issue-worktree", kind: "dialog", width: 580, height: 500, props: { folder: f.dir, machine: f.machine, action: "new" } });
     else run("space.new", { folder: f.dir, machine: f.machine ?? "" });
   }
 

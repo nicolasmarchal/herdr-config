@@ -37,7 +37,7 @@ function openName(p) {
 }
 
 function worktree(args) {
-  openOverlay({ mod: "worktree", kind: "dialog", ...(args.action === "open" ? { width: 560, height: 480 } : { width: 440, height: 260 }), props: args });
+  openOverlay({ mod: "issue-worktree", kind: "dialog", ...(args.action === "remove" ? { width: 440, height: 260 } : { width: 580, height: 500 }), props: args });
 }
 
 const overview = (key) => {

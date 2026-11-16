@@ -2,7 +2,9 @@
 // - panels remembered per tab (shared "tab.panels"): a new tab starts with only
 //   its terminals, full size; each tab gets back its own panel/editor/terminal state,
 // - Editor / Terminal toggles and terminal above/below (Coding only),
-// - Open in Xcode / Android Studio when the tab's repo is one.
+// - Open in Xcode / Android Studio when the tab's repo is one,
+// - the branch's GitHub pull request (gh), and the issue its worktree was made
+//   for (shared "worktree.issues", written by the issue-worktree dialog).
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, ScrollHandle } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, exec, notify } from "herdr";
@@ -22,6 +24,8 @@ export default class Tabs extends View {
     this.scroll = ScrollHandle.new();
     // IDE detection resolves outside render; redraw once it lands.
     cx.timer.every(500, (cx) => { if (this.notifyLater) { this.notifyLater = false; cx.notify(); } });
+    // A PR opened or merged meanwhile: look again now and then (github() keeps a minute).
+    cx.timer.every(60000, () => { this.notifyLater = true; });
   }
 
   // What this tab shows. Missing nodes (Standard has no editor) are left out.
@@ -100,6 +104,34 @@ printf '%s\n%s\n%s\n' "$top" "$x" "$a"`;
     return this.ides[cwd];
   }
 
+  // The active tab's branch on GitHub: { pr, issue }, each null when there's none.
+  github(space, tabId) {
+    const p = panes().find(x => x.tab === tabId && x.terminal && x.cwd);
+    const cwd = p?.cwd ?? space?.folder, branch = p?.branch ?? space?.branch;
+    if (!cwd || !branch) return null;
+    const machine = space?.machine ?? null;
+    const key = `${machine ?? ""}|${cwd}|${branch}`;
+    this.gh ??= {};
+    const hit = this.gh[key];
+    if (!hit || (!hit.loading && Date.now() - hit.at > 60000)) {
+      this.gh[key] = { ...(hit ?? { pr: null, repo: null }), at: Date.now(), loading: true };
+      const script = `common=$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || exit 3
+printf '%s\n' "$common"
+cd "$1" && gh pr list --head "$2" --state all --limit 5 --json number,url,state,isDraft,title,headRefName`;
+      exec("sh", ["-c", script, "gh", cwd, branch], { on: machine ?? undefined, timeout: 20000 }).then((r) => {
+        const [common = "", ...rest] = r.stdout.split("\n");
+        let prs = [];
+        try { prs = JSON.parse(rest.join("\n").trim() || "[]").filter(x => x.headRefName === branch); } catch {}
+        const pr = prs.find(x => x.state === "OPEN") ?? prs[0] ?? null;
+        this.gh[key] = { at: Date.now(), loading: false, repo: common.trim().replace(/\/\.git$/, "") || null, pr };
+        this.notifyLater = true;
+      }).catch(() => { this.gh[key] = { ...this.gh[key], at: Date.now(), loading: false }; });
+    }
+    const g = this.gh[key];
+    const issue = g.repo ? shared("worktree.issues")?.[`${machine ?? ""}|${g.repo}|${branch}`] ?? null : null;
+    return { pr: g.pr, issue };
+  }
+
   render() {
     const t = theme();
     const space = spaces().find(p => p.active);
@@ -146,6 +178,15 @@ printf '%s\n%s\n%s\n' "$top" "$x" "$a"`;
     if (find(root, "history")) enabled.push("history");
     this.syncTab(selected, root, enabled);
     const ide = this.ide(space, selected);
+    const gh = this.github(space, selected);
+    const browse = (url) => exec(w?.platform === "windows" ? "explorer" : w?.platform === "macos" ? "open" : "xdg-open", [url]);
+    const pr = gh?.pr, issue = gh?.issue;
+    const prColor = !pr ? t.dim : pr.isDraft && pr.state === "OPEN" ? t.dim : pr.state === "OPEN" ? t.ansi2 : pr.state === "MERGED" ? t.ansi5 : t.ansi1;
+    const prState = !pr ? "" : pr.state === "OPEN" ? (pr.isDraft ? "Draft" : "") : pr.state === "MERGED" ? "Merged" : "Closed";
+    const linkButton = (id, icon, color, label, extra, url) => h_flex().id(id).h(26).px(8).gap(5).flex_none().items_center().rounded(6).text_size(12).text_color(t.muted)
+      .hover(s => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop).on_click(() => browse(url))
+      .child(svg(icon).size(14).text_color(color)).child(label)
+      .when(Boolean(extra), el => el.child(div().text_size(10.5).text_color(t.dim).child(extra)));
     const openIn = (app, path) => exec("open", ["-a", app, path]).then(r => { if (r.code !== 0) notify({ title: `Couldn't open ${app}`, body: r.stderr.trim(), level: "error" }); });
     const panelButton = (id, label, icon) => {
       const on = panel && !panel.hidden && body?.active === id;
@@ -179,6 +220,9 @@ printf '%s\n%s\n%s\n' "$top" "$x" "$a"`;
       .when(enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
       .when(enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))
       .when(enabled.includes("history"), el => el.child(panelButton("history", "History", "mods/workspace-chrome/clock.svg")))
+      .when(Boolean(pr || issue), el => el.child(div().w(1).h(16).mx(4).bg(t.border)))
+      .when(Boolean(issue), el => el.child(linkButton("open-issue", "mods/coding-tabs/issue.svg", t.ansi2, `#${issue.number}`, "", issue.url)))
+      .when(Boolean(pr), el => el.child(linkButton("open-pr", "mods/coding-tabs/pull-request.svg", prColor, `PR #${pr.number}`, prState, pr.url)))
       .when(Boolean(ide?.xcode || ide?.android), el => el.child(div().w(1).h(16).mx(4).bg(t.border)))
       .when(Boolean(ide?.xcode), el => el.child(h_flex().id("open-xcode").h(26).px(8).gap(5).flex_none().items_center().rounded(6).text_size(12).text_color(t.muted)
         .hover(s => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop).on_click(() => openIn("Xcode", ide.xcode))

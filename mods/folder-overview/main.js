@@ -613,7 +613,7 @@ export default class FolderOverview extends View {
         .when(Boolean(f?.git), (el) => el
           .child(button("ov-fetch", this.fetching ? "Fetching…" : "Fetch", "refresh", (_e, cx) => this.refresh(cx, true), this.fetching))
           .child(button("ov-new", "New branch", "git-branch",
-            () => openOverlay({ mod: "worktree", kind: "dialog", width: 440, height: 260, props: { folder: f.dir, machine: f.machine, action: "new" } }))))
+            () => openOverlay({ mod: "issue-worktree", kind: "dialog", width: 580, height: 500, props: { folder: f.dir, machine: f.machine, action: "new" } }))))
         .child(button("ov-close", "Close", "x", () => run("layout.select", { stack: "work-stack", child: "work" }))))
       .when(Boolean(this.error), (el) => el.child(div().flex_none().px(16).py(6).text_size(12).text_color(t.blocked).child(this.error)))
       // Body
