@@ -1,39 +1,22 @@
 // Menus and the name dialog for the folder-spaces sidebar. Opened as an overlay
 // with props:
-//   { kind: "space", space, head }  a space's right-click menu (Herdr's space items
-//                                   plus folder items; `head` is the space whose
-//                                   folder counts: a worktree follows its repo's)
-//   { kind: "folder", folder }      a folder's right-click menu
-//   { kind: "name", folder?, space?, title }
-//                                   a name dialog: renames `folder`, else makes a new
-//                                   folder (with `space` in it, when given)
-// Folders live in shared("space.folders"): [{ id, name, collapsed, spaces: [id] }].
+//   { kind: "space", space }    a space's right-click menu
+//   { kind: "folder", key }     a folder's right-click menu (key: the sidebar's
+//                               folder key, described in shared("folder.groups"))
+//   { kind: "name", key, title } a name dialog: the folder's display name
+// Folder names and folds live in shared("space.groups"): { [key]: { name?, collapsed? } }.
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { run, props, closeOverlay, openOverlay, theme, spaces, panes, exec, shared, setShared } from "herdr";
 
-const KEY = "space.folders";
-
-export function readFolders() {
-  const raw = shared(KEY);
-  return Array.isArray(raw) ? raw.filter((f) => f && typeof f.id === "string").map((f) => ({
-    id: f.id, name: String(f.name ?? "Folder"), collapsed: !!f.collapsed,
-    spaces: Array.isArray(f.spaces) ? f.spaces.filter((s) => typeof s === "string") : [],
-  })) : [];
-}
-
-const save = (list) => setShared(KEY, list);
-
-// Puts `space` in folder `to` (null: back to the top level), out of any other.
-function moveTo(space, to) {
-  save(readFolders().map((f) => ({
-    ...f,
-    spaces: f.id === to ? [...f.spaces.filter((s) => s !== space), space] : f.spaces.filter((s) => s !== space),
-  })));
-}
-
-const newId = () => `f${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+const GROUPS = "space.groups";
+const prefs = () => {
+  const raw = shared(GROUPS);
+  return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+};
+const setPref = (key, patch) => setShared(GROUPS, { ...prefs(), [key]: { ...(prefs()[key] ?? {}), ...patch } });
+const group = (key) => (shared("folder.groups") ?? {})[key] ?? null;
 
 function place(s) {
   const tabs = new Set((s.tabs ?? []).map((c) => c.id));
@@ -57,41 +40,43 @@ function worktree(args) {
   openOverlay({ mod: "worktree", kind: "dialog", ...(args.action === "open" ? { width: 560, height: 480 } : { width: 440, height: 260 }), props: args });
 }
 
-// Each item: { label, icon, act, sep? (a line above it), dim? }.
+const overview = (key) => {
+  const sp = spaces().find((x) => x.active);
+  setShared("folder.overview.from", `${sp?.id}|${sp?.tabs?.find((x) => x.active)?.id}`);
+  setShared("folder.overview", key);
+  run("layout.select", { stack: "work-stack", child: "overview" });
+};
+
+// Each item: { label, icon, act, sep? (a line above it) }.
 function items(p, git) {
-  const folders = readFolders();
   if (p.kind === "folder") {
-    const f = folders.find((x) => x.id === p.folder);
+    const f = group(p.key);
     if (!f) return [];
+    const collapsed = !!prefs()[p.key]?.collapsed;
+    const at = { folder: f.dir, machine: f.machine };
     return [
-      { label: "Rename folder…", icon: "square-pen", act: () => openName({ folder: f.id, title: "Rename folder" }) },
-      { label: f.collapsed ? "Expand" : "Collapse", icon: f.collapsed ? "chevron-down" : "chevron-right",
-        act: () => save(readFolders().map((x) => (x.id === f.id ? { ...x, collapsed: !x.collapsed } : x))) },
-      { label: "New folder…", icon: "folder-plus", act: () => openName({ title: "New folder" }) },
-      { label: "Delete folder", icon: "x", sep: true, act: () => save(readFolders().filter((x) => x.id !== f.id)) },
+      ...(f.git ? [
+        { label: "New branch (worktree)…", icon: "git-branch", act: () => worktree({ ...at, action: "new" }) },
+        { label: "Open worktree…", icon: "git-compare", act: () => worktree({ ...at, action: "open" }) },
+      ] : [{ label: "New space here", icon: "plus", act: () => run("space.new", { folder: f.dir, machine: f.machine ?? "" }) }]),
+      { label: "Overview", icon: "layers", sep: true, act: () => overview(p.key) },
+      ...(!f.machine ? [{ label: "Show in Finder", icon: "folder", act: () => exec("open", [f.dir]) }] : []),
+      { label: "Rename…", icon: "square-pen", sep: true, act: () => openName({ key: p.key, title: "Rename folder" }) },
+      ...(f.alias ? [{ label: "Use directory name", icon: "x", act: () => setPref(p.key, { name: null }) }] : []),
+      { label: collapsed ? "Expand" : "Collapse", icon: collapsed ? "chevron-down" : "chevron-right", act: () => setPref(p.key, { collapsed: !collapsed }) },
     ];
   }
   // A space.
-  const id = p.space, head = p.head ?? p.space;
-  const current = folders.find((f) => f.spaces.includes(head));
-  const follows = head !== id;
-  const spaceItems = [
-    { label: "Rename", icon: "square-pen", act: () => run("space.rename", { id }) },
+  const id = p.space;
+  return [
+    { label: "Rename space", icon: "square-pen", act: () => run("space.rename", { id }) },
     ...(git ? [
-      { label: "New worktree", icon: "git-branch", act: () => worktree({ space: id, action: "new" }) },
-      { label: "Open worktree", icon: "git-branch", act: () => worktree({ space: id, action: "open" }) },
+      { label: "New branch from here…", icon: "git-branch", sep: true, act: () => worktree({ space: id, action: "new" }) },
+      { label: "Open worktree…", icon: "git-compare", act: () => worktree({ space: id, action: "open" }) },
     ] : []),
-    ...(git === "linked" ? [{ label: "Remove worktree", icon: "git-branch", act: () => worktree({ space: id, action: "remove" }) }] : []),
+    ...(git === "linked" ? [{ label: "Remove worktree…", icon: "archive", act: () => worktree({ space: id, action: "remove" }) }] : []),
+    { label: "Close space", icon: "x", sep: true, act: () => run("space.close", { id }) },
   ];
-  const folderItems = [
-    ...folders.filter((f) => f.id !== current?.id).map((f, n) => ({
-      label: `Move to ${f.name}`, icon: "folder", sep: n === 0, act: () => moveTo(head, f.id),
-    })),
-    { label: follows ? "New folder with its repo…" : "New folder…", icon: "folder-plus", sep: !folders.some((f) => f.id !== current?.id),
-      act: () => openName({ space: head, title: "New folder" }) },
-    ...(current ? [{ label: `Remove from ${current.name}`, icon: "minus", act: () => moveTo(head, null) }] : []),
-  ];
-  return [...spaceItems, ...folderItems, { label: "Close", icon: "x", sep: true, act: () => run("space.close", { id }) }];
 }
 
 class Menu {
@@ -138,8 +123,7 @@ class Menu {
 class Name {
   constructor(cx) {
     const p = props() ?? {};
-    const f = p.folder && readFolders().find((x) => x.id === p.folder);
-    this.text = f ? f.name : "";
+    this.text = group(p.key)?.name ?? "";
     this.input = InputState.new({ value: this.text, placeholder: "Folder name" });
     if (this.text) this.input.set_selected_range({ start: 0, end: this.text.length });
     this.input.on("change", (_e, cx) => { this.text = this.input.value(); cx.notify(); });
@@ -152,18 +136,13 @@ class Name {
     const p = props() ?? {};
     const name = this.text.trim();
     closeOverlay(p.overlay);
-    if (!name) return;
-    const list = readFolders();
-    if (p.folder) {
-      save(list.map((f) => (f.id === p.folder ? { ...f, name } : f)));
-    } else {
-      const fresh = { id: newId(), name, collapsed: false, spaces: p.space ? [p.space] : [] };
-      save([...list.map((f) => ({ ...f, spaces: f.spaces.filter((s) => s !== p.space) })), fresh]);
-    }
+    // Empty: back to the directory's own name.
+    if (p.key) setPref(p.key, { name: name || null });
   }
 
   render(t, handle) {
     const p = props() ?? {};
+    const f = group(p.key);
     const button = (id, text, primary, action) => h_flex().id(id).h(32).px(14).items_center().rounded(8)
       .border_1().border_color(primary ? t.solid : t.input).bg(primary ? t.solid : t.raised)
       .text_color(primary ? t.solid_foreground : t.foreground).text_size(12.5).font_medium().cursor_pointer()
@@ -173,11 +152,12 @@ class Name {
       .w_full().min_h(0).p(18).bg(t.popover).text_color(t.foreground)
       .child(h_flex().items_center().child(div().flex_1().text_size(15).font_semibold().child(p.title ?? "Folder"))
         .child(div().text_size(11).text_color(t.dim).child("Esc")))
-      .child(div().pt(16).pb(7).text_size(11.5).text_color(t.dim).child("Name"))
+      .child(div().pt(16).pb(7).text_size(11.5).text_color(t.dim).truncate()
+        .child(f ? `Name shown for ${f.dir} (empty: its own name)` : "Name"))
       .child(Input.new(this.input).h(36).px(10).rounded(9).border_1().border_color(t.accent).bg(t.background).text_size(12.8).text_color(t.foreground))
       .child(h_flex().pt(20).gap(8).justify_end()
         .child(button("fsm-cancel", "Cancel", false, () => closeOverlay(p.overlay)))
-        .child(button("fsm-save", p.folder ? "Rename" : "Create", true, () => this.submit())));
+        .child(button("fsm-save", "Rename", true, () => this.submit())));
   }
 }
 
